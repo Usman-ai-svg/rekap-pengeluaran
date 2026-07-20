@@ -23,7 +23,9 @@ export function PengeluaranForm({
     defaultValues?.harga_satuan?.toString() ?? "",
   );
   const [total, setTotal] = useState(defaultValues?.total?.toString() ?? "");
-  const [totalTouched, setTotalTouched] = useState(false);
+  // Saat mengedit data lama, jangan timpa total yang sudah tersimpan hanya
+  // karena volume/harga diubah — total dianggap "sudah disentuh" sejak awal.
+  const [totalTouched, setTotalTouched] = useState(Boolean(defaultValues));
 
   function recalcTotal(nextVolume: string, nextHarga: string) {
     if (totalTouched) return;

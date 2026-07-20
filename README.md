@@ -74,7 +74,6 @@ proyek — admin mengatur role & proyek yang bisa diakses dari halaman Admin.
 
 - Dashboard masih tabel, belum grafis (Fase 2).
 - Belum ada export Excel/PDF (Fase 2).
-- File bukti pembayaran disimpan di bucket privat; siapa saja yang sudah
-  login bisa mengakses signed URL bila tahu path-nya — cukup untuk tim
-  internal kecil di Fase 1, bisa diperketat (scoping per proyek) kalau
-  dibutuhkan nanti.
+- Query daftar/dashboard belum diberi paginasi eksplisit — untuk volume
+  data Fase 1 (3-5 proyek, mingguan) belum jadi masalah, tapi kalau baris
+  `pengeluaran` sudah sangat banyak, pertimbangkan menambah paginasi.

@@ -5,11 +5,21 @@ import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
+const MAX_BUKTI_SIZE = 10 * 1024 * 1024; // 10MB, must match supabase/schema.sql bucket config
+const ALLOWED_BUKTI_TYPES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
+
 async function uploadBukti(
   supabase: Awaited<ReturnType<typeof createClient>>,
   proyekId: string,
   file: File,
 ) {
+  if (file.size > MAX_BUKTI_SIZE) {
+    throw new Error("Ukuran file bukti pembayaran maksimal 10MB.");
+  }
+  if (!ALLOWED_BUKTI_TYPES.includes(file.type)) {
+    throw new Error("Format file bukti pembayaran harus JPG, PNG, WEBP, atau PDF.");
+  }
+
   const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
   const path = `${proyekId}/${crypto.randomUUID()}.${ext}`;
   const { error } = await supabase.storage
@@ -17,6 +27,14 @@ async function uploadBukti(
     .upload(path, file);
   if (error) throw new Error(`Gagal upload bukti pembayaran: ${error.message}`);
   return path;
+}
+
+async function removeBukti(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  path: string | null | undefined,
+) {
+  if (!path) return;
+  await supabase.storage.from("bukti-pembayaran").remove([path]);
 }
 
 function parseFields(formData: FormData) {
@@ -69,7 +87,11 @@ export async function createPengeluaran(formData: FormData) {
     bukti_pembayaran_url: buktiPath,
   });
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Jangan tinggalkan file yatim di storage kalau insert-nya gagal.
+    await removeBukti(supabase, buktiPath);
+    throw new Error(error.message);
+  }
 
   revalidatePath(`/proyek/${fields.proyekId}/pengeluaran`);
   redirect(`/proyek/${fields.proyekId}/pengeluaran`);
@@ -80,13 +102,23 @@ export async function updatePengeluaran(pengeluaranId: string, formData: FormDat
   const supabase = await createClient();
   const fields = parseFields(formData);
 
+  const { data: existing } = await supabase
+    .from("pengeluaran")
+    .select("proyek_id, bukti_pembayaran_url")
+    .eq("id", pengeluaranId)
+    .single();
+
+  if (!existing) {
+    throw new Error("Data pengeluaran tidak ditemukan atau kamu tidak punya akses.");
+  }
+
   const file = formData.get("bukti") as File | null;
   let buktiPath: string | undefined;
   if (file && file.size > 0) {
-    buktiPath = await uploadBukti(supabase, fields.proyekId, file);
+    buktiPath = await uploadBukti(supabase, existing.proyek_id, file);
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("pengeluaran")
     .update({
       kategori_id: fields.kategoriId,
@@ -99,24 +131,40 @@ export async function updatePengeluaran(pengeluaranId: string, formData: FormDat
       catatan: fields.catatan,
       ...(buktiPath ? { bukti_pembayaran_url: buktiPath } : {}),
     })
-    .eq("id", pengeluaranId);
+    .eq("id", pengeluaranId)
+    .select("id")
+    .single();
 
-  if (error) throw new Error(error.message);
+  if (error || !updated) {
+    // RLS menolak (bukan pemilik & bukan admin) tanpa error eksplisit — bersihkan file baru kalau sempat ke-upload.
+    await removeBukti(supabase, buktiPath);
+    throw new Error(error?.message ?? "Kamu tidak punya izin mengubah pengeluaran ini.");
+  }
 
-  revalidatePath(`/proyek/${fields.proyekId}/pengeluaran`);
-  redirect(`/proyek/${fields.proyekId}/pengeluaran`);
+  if (buktiPath) {
+    await removeBukti(supabase, existing.bukti_pembayaran_url);
+  }
+
+  revalidatePath(`/proyek/${existing.proyek_id}/pengeluaran`);
+  redirect(`/proyek/${existing.proyek_id}/pengeluaran`);
 }
 
 export async function deletePengeluaran(proyekId: string, pengeluaranId: string) {
   await requireUser();
   const supabase = await createClient();
 
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from("pengeluaran")
     .delete()
-    .eq("id", pengeluaranId);
+    .eq("id", pengeluaranId)
+    .select("bukti_pembayaran_url")
+    .single();
 
-  if (error) throw new Error(error.message);
+  if (error || !deleted) {
+    throw new Error(error?.message ?? "Kamu tidak punya izin menghapus pengeluaran ini.");
+  }
+
+  await removeBukti(supabase, deleted.bukti_pembayaran_url);
 
   revalidatePath(`/proyek/${proyekId}/pengeluaran`);
 }

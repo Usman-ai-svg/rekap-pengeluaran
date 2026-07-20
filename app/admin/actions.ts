@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireOpsAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
+const UNIQUE_VIOLATION = "23505";
+
 export async function createProyek(formData: FormData) {
   await requireOpsAdmin();
   const supabase = await createClient();
@@ -23,7 +25,12 @@ export async function createProyek(formData: FormData) {
     nilai_kontrak_rap: nilaiKontrakRap,
   });
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error.code === UNIQUE_VIOLATION) {
+      throw new Error(`Kode proyek "${kodeProyek}" sudah dipakai. Gunakan kode lain.`);
+    }
+    throw new Error(error.message);
+  }
   revalidatePath("/admin");
   revalidatePath("/");
 }
@@ -54,7 +61,12 @@ export async function createKategori(formData: FormData) {
   if (!nama) throw new Error("Nama kategori wajib diisi.");
 
   const { error } = await supabase.from("kategori_pengeluaran").insert({ nama });
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error.code === UNIQUE_VIOLATION) {
+      throw new Error(`Kategori "${nama}" sudah ada.`);
+    }
+    throw new Error(error.message);
+  }
   revalidatePath("/admin");
 }
 

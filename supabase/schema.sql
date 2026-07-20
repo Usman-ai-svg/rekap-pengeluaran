@@ -228,24 +228,46 @@ create policy "pengeluaran_delete" on public.pengeluaran
 -- ============================================================
 -- Storage — bukti pembayaran (private bucket, accessed via
 -- signed URLs generated server-side after the app confirms the
--- caller can already read the related pengeluaran row).
+-- caller can already read the related pengeluaran row). Files are
+-- uploaded to `${proyek_id}/${uuid}.ext`, so the first path segment
+-- is used to scope access to the same proyek the caller can access.
 -- ============================================================
 
-insert into storage.buckets (id, name, public)
-values ('bukti-pembayaran', 'bukti-pembayaran', false)
-on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'bukti-pembayaran',
+  'bukti-pembayaran',
+  false,
+  10485760, -- 10MB
+  array['image/png', 'image/jpeg', 'image/webp', 'application/pdf']
+)
+on conflict (id) do update set
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 create policy "bukti_pembayaran_insert" on storage.objects
   for insert with check (
-    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+    bucket_id = 'bukti-pembayaran'
+    and (
+      public.is_ops_admin()
+      or (storage.foldername(name))[1]::uuid = any (public.current_user_proyek_ids())
+    )
   );
 
 create policy "bukti_pembayaran_select" on storage.objects
   for select using (
-    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+    bucket_id = 'bukti-pembayaran'
+    and (
+      public.is_ops_admin()
+      or (storage.foldername(name))[1]::uuid = any (public.current_user_proyek_ids())
+    )
   );
 
 create policy "bukti_pembayaran_delete" on storage.objects
   for delete using (
-    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+    bucket_id = 'bukti-pembayaran'
+    and (
+      public.is_ops_admin()
+      or (storage.foldername(name))[1]::uuid = any (public.current_user_proyek_ids())
+    )
   );

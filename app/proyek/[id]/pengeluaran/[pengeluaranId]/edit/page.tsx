@@ -18,7 +18,12 @@ export default async function EditPengeluaranPage({
     await Promise.all([
       supabase.from("proyek").select("*").eq("id", id).single(),
       supabase.from("kategori_pengeluaran").select("*").order("nama"),
-      supabase.from("pengeluaran").select("*").eq("id", pengeluaranId).single(),
+      supabase
+        .from("pengeluaran")
+        .select("*")
+        .eq("id", pengeluaranId)
+        .eq("proyek_id", id)
+        .single(),
     ]);
 
   if (!proyek || !pengeluaran) notFound();
