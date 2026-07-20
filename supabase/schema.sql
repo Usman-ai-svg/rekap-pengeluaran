@@ -1,0 +1,227 @@
+-- Nanoland — Sistem Pencatatan & Konsolidasi Pengeluaran Proyek
+-- Phase 1 schema. Run once against a fresh Supabase project (SQL Editor).
+
+create extension if not exists "pgcrypto";
+
+-- ============================================================
+-- Tables
+-- ============================================================
+
+create table public.proyek (
+  id uuid primary key default gen_random_uuid(),
+  kode_proyek text not null unique,
+  nama_proyek text not null,
+  nilai_kontrak_rap numeric,
+  status_aktif boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table public.kategori_pengeluaran (
+  id serial primary key,
+  nama text not null unique
+);
+
+create type public.user_role as enum ('QS', 'OPS_ADMIN');
+
+-- One row per auth.users entry; created automatically via trigger below.
+create table public.users (
+  id uuid primary key references auth.users (id) on delete cascade,
+  nama text not null,
+  role public.user_role not null default 'QS',
+  proyek_assigned uuid[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table public.pengeluaran (
+  id uuid primary key default gen_random_uuid(),
+  proyek_id uuid not null references public.proyek (id),
+  kategori_id integer not null references public.kategori_pengeluaran (id),
+  tanggal date not null,
+  keterangan text not null,
+  volume numeric,
+  satuan text,
+  harga_satuan numeric,
+  total numeric not null,
+  dicatat_oleh uuid not null references public.users (id),
+  dibuat_pada timestamptz not null default now(),
+  catatan text,
+  bukti_pembayaran_url text
+);
+
+create index pengeluaran_proyek_id_idx on public.pengeluaran (proyek_id);
+create index pengeluaran_kategori_id_idx on public.pengeluaran (kategori_id);
+create index pengeluaran_tanggal_idx on public.pengeluaran (tanggal);
+
+-- ============================================================
+-- Seed default kategori
+-- ============================================================
+
+insert into public.kategori_pengeluaran (nama) values
+  ('BORONGAN'),
+  ('TENAGA_HARIAN'),
+  ('MATERIAL'),
+  ('PETTY_CASH'),
+  ('ORMAS'),
+  ('SUBKON')
+on conflict (nama) do nothing;
+
+-- ============================================================
+-- Auto-create a users profile row when someone signs up.
+-- New users default to QS with no assigned proyek; an OPS_ADMIN
+-- promotes/assigns them from the Admin page.
+-- ============================================================
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.users (id, nama, role)
+  values (new.id, coalesce(new.raw_user_meta_data ->> 'nama', new.email), 'QS');
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ============================================================
+-- Helper functions (security definer so RLS on `users` doesn't
+-- recurse when other policies look up the caller's role/proyek).
+-- ============================================================
+
+create or replace function public.current_user_role()
+returns public.user_role
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select role from public.users where id = auth.uid();
+$$;
+
+create or replace function public.current_user_proyek_ids()
+returns uuid[]
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select proyek_assigned from public.users where id = auth.uid();
+$$;
+
+create or replace function public.is_ops_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select public.current_user_role() = 'OPS_ADMIN';
+$$;
+
+-- ============================================================
+-- Row Level Security
+-- ============================================================
+
+alter table public.proyek enable row level security;
+alter table public.kategori_pengeluaran enable row level security;
+alter table public.users enable row level security;
+alter table public.pengeluaran enable row level security;
+
+-- users: everyone can read their own profile; admins can read/manage everyone.
+create policy "users_select_own" on public.users
+  for select using (id = auth.uid());
+
+create policy "users_select_admin" on public.users
+  for select using (public.is_ops_admin());
+
+create policy "users_admin_write" on public.users
+  for update using (public.is_ops_admin())
+  with check (public.is_ops_admin());
+
+-- proyek: admins see/manage all; QS see only their assigned proyek.
+create policy "proyek_select" on public.proyek
+  for select using (
+    public.is_ops_admin() or id = any (public.current_user_proyek_ids())
+  );
+
+create policy "proyek_admin_insert" on public.proyek
+  for insert with check (public.is_ops_admin());
+
+create policy "proyek_admin_update" on public.proyek
+  for update using (public.is_ops_admin()) with check (public.is_ops_admin());
+
+create policy "proyek_admin_delete" on public.proyek
+  for delete using (public.is_ops_admin());
+
+-- kategori_pengeluaran: any signed-in user can read; only admins manage.
+create policy "kategori_select_all" on public.kategori_pengeluaran
+  for select using (auth.uid() is not null);
+
+create policy "kategori_admin_insert" on public.kategori_pengeluaran
+  for insert with check (public.is_ops_admin());
+
+create policy "kategori_admin_update" on public.kategori_pengeluaran
+  for update using (public.is_ops_admin()) with check (public.is_ops_admin());
+
+create policy "kategori_admin_delete" on public.kategori_pengeluaran
+  for delete using (public.is_ops_admin());
+
+-- pengeluaran: admins see/manage all; QS see/manage entries for their
+-- assigned proyek, and can only edit/delete rows they created.
+create policy "pengeluaran_select" on public.pengeluaran
+  for select using (
+    public.is_ops_admin() or proyek_id = any (public.current_user_proyek_ids())
+  );
+
+create policy "pengeluaran_insert" on public.pengeluaran
+  for insert with check (
+    dicatat_oleh = auth.uid()
+    and (
+      public.is_ops_admin() or proyek_id = any (public.current_user_proyek_ids())
+    )
+  );
+
+create policy "pengeluaran_update" on public.pengeluaran
+  for update using (
+    public.is_ops_admin()
+    or (proyek_id = any (public.current_user_proyek_ids()) and dicatat_oleh = auth.uid())
+  ) with check (
+    public.is_ops_admin()
+    or (proyek_id = any (public.current_user_proyek_ids()) and dicatat_oleh = auth.uid())
+  );
+
+create policy "pengeluaran_delete" on public.pengeluaran
+  for delete using (
+    public.is_ops_admin()
+    or (proyek_id = any (public.current_user_proyek_ids()) and dicatat_oleh = auth.uid())
+  );
+
+-- ============================================================
+-- Storage — bukti pembayaran (private bucket, accessed via
+-- signed URLs generated server-side after the app confirms the
+-- caller can already read the related pengeluaran row).
+-- ============================================================
+
+insert into storage.buckets (id, name, public)
+values ('bukti-pembayaran', 'bukti-pembayaran', false)
+on conflict (id) do nothing;
+
+create policy "bukti_pembayaran_insert" on storage.objects
+  for insert with check (
+    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+  );
+
+create policy "bukti_pembayaran_select" on storage.objects
+  for select using (
+    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+  );
+
+create policy "bukti_pembayaran_delete" on storage.objects
+  for delete using (
+    bucket_id = 'bukti-pembayaran' and auth.uid() is not null
+  );
