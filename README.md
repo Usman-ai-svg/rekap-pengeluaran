@@ -13,7 +13,9 @@ Stack: Next.js (App Router) + Supabase (Postgres, Auth, Storage) + Vercel.
 2. Buka **SQL Editor** di project tsb, jalankan seluruh isi [`supabase/schema.sql`](./supabase/schema.sql).
    Ini membuat tabel (`proyek`, `kategori_pengeluaran`, `users`, `pengeluaran`),
    seed kategori default, trigger auto-provision profil user, RLS policies,
-   dan storage bucket privat `bukti-pembayaran`.
+   dan storage bucket privat `bukti-pembayaran`. Script ini aman dijalankan
+   ulang (drop-and-recreate) — kalau kena error karena run sebelumnya
+   sempat berhenti di tengah jalan, tinggal jalankan lagi seluruh filenya.
 3. Di Supabase Dashboard → **Authentication → Providers**, pastikan Email
    provider aktif. Buat user pertama lewat **Authentication → Users → Add user**
    (ini akan otomatis dapat baris `public.users` dengan role `QS`).

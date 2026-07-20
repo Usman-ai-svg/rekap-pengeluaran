@@ -1,7 +1,31 @@
 -- Nanoland — Sistem Pencatatan & Konsolidasi Pengeluaran Proyek
--- Phase 1 schema. Run once against a fresh Supabase project (SQL Editor).
+-- Phase 1 schema. Safe to re-run: drops its own objects first, so
+-- running this whole file again (e.g. after a partial/failed run)
+-- just resets and recreates everything from scratch. Do not run
+-- this against a project that already has real data you want to keep.
 
 create extension if not exists "pgcrypto";
+
+-- ============================================================
+-- Reset (drop in dependency order, ignore if this is a fresh project)
+-- ============================================================
+
+drop trigger if exists on_auth_user_created on auth.users;
+drop policy if exists "bukti_pembayaran_insert" on storage.objects;
+drop policy if exists "bukti_pembayaran_select" on storage.objects;
+drop policy if exists "bukti_pembayaran_delete" on storage.objects;
+
+drop table if exists public.pengeluaran cascade;
+drop table if exists public.users cascade;
+drop table if exists public.kategori_pengeluaran cascade;
+drop table if exists public.proyek cascade;
+
+drop function if exists public.handle_new_user() cascade;
+drop function if exists public.current_user_role() cascade;
+drop function if exists public.current_user_proyek_ids() cascade;
+drop function if exists public.is_ops_admin() cascade;
+
+drop type if exists public.user_role cascade;
 
 -- ============================================================
 -- Tables
